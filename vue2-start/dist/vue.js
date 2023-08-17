@@ -50,10 +50,56 @@
     return typeof key === "symbol" ? key : String(key);
   }
 
+  //保存Array构造函数的原型
+  var oldArrayProto = Array.prototype;
+  //Object.create() 创建一个新的对象，并将指定的对象上的原型继承给新对象
+  var newArrayProto = Object.create(oldArrayProto);
+  var methods = ['push', 'unshift', 'pop', 'shift', 'reverse', 'sort', 'splice']; //改变数组的方法
+  methods.forEach(function (item) {
+    //在新对象的原型上调用数组上本身原型上的方法 （这种思想叫做代码切片）
+    newArrayProto[item] = function () {
+      var _oldArrayProto$item;
+      for (var _len = arguments.length, args = new Array(_len), _key = 0; _key < _len; _key++) {
+        args[_key] = arguments[_key];
+      }
+      var result = (_oldArrayProto$item = oldArrayProto[item]).call.apply(_oldArrayProto$item, [this].concat(args));
+      var insertd;
+      //当前的this指向的是 arr.push 谁调用的push this指向的是谁,为了让这里调用Observer类上的observeArray函数
+      var ob = this._ob_;
+      switch (item) {
+        case 'push':
+        case 'unshift':
+          insertd = args;
+          break;
+        case 'splice':
+          //args.splice(0,1,{a:2}) {a:2} 就是新增的数据 args=(0,1,{a:2})
+          insertd = args.slice(2);
+      }
+      if (insertd) {
+        ob.observeArray(insertd);
+      }
+      return result;
+    };
+  });
+
   var Observer = /*#__PURE__*/function () {
     function Observer(data) {
       _classCallCheck(this, Observer);
-      this.walk(data);
+      //将类实例赋值给_ob_属性,如果给_ob_可执行枚举，那样会让他爆栈，递归死循环
+      Object.defineProperty(data, '_ob_', {
+        enumerable: false,
+        value: this
+      });
+
+      //如果data是数组的时候就不应该在用观测对象的方式来对数组做响应式
+      if (Array.isArray(data)) {
+        //重写data中数组的七个方法,保留原来的数组的特性，但是可以在新的对象原型添加想添加的方法
+        data._proto_ = newArrayProto;
+        this.observeArray(data); //如果数组中的是对象值就可以继续监听到对象里面的变化 ['a','s',{name:'ss'}]
+        //如果data是数组，但是数组值发生了变化，
+      } else {
+        this.walk(data);
+      }
     }
     _createClass(Observer, [{
       key: "walk",
@@ -61,6 +107,13 @@
         //重新定义属性
         Object.keys(data).forEach(function (key) {
           return defineReactive(data, key, data[key]);
+        });
+      }
+    }, {
+      key: "observeArray",
+      value: function observeArray(data) {
+        data.forEach(function (item) {
+          return observe(item);
         });
       }
     }]);
@@ -78,6 +131,8 @@
         if (newValue == value) {
           return;
         }
+        //如果 vm.name={a:1} 是通过这个的方式来设置值，他也要监听到设置值中的对象
+        observe(newValue);
         value = newValue;
       }
     });

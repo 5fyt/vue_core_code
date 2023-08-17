@@ -1,4 +1,4 @@
-import { observe } from './observe'
+import { observe } from './observe/index'
 export function initState(vm) {
   const opts = vm.$options
   //opts 选项里面可能还有props,watch,data .... 等选项
