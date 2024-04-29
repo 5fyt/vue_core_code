@@ -4,6 +4,134 @@
   (global = typeof globalThis !== 'undefined' ? globalThis : global || self, global.Vue = factory());
 })(this, (function () { 'use strict';
 
+  var ncname = "[a-zA-Z_][\\-\\.0-9_a-zA-Z]*";
+  var qnameCapture = "((?:".concat(ncname, "\\:)?").concat(ncname, ")");
+  var startTagOpen = new RegExp("^<".concat(qnameCapture)); // 它匹配到的分组是一个 标签名 <xxx 匹配到的是开始标签的名字
+  var endTag = new RegExp("^<\\/".concat(qnameCapture, "[^>]*>")); // 匹配的是</xxx> 最终匹配到的分组就是结束标签的名字
+  var attribute = /^\s*([^\s"'<>\/=]+)(?:\s*(=)\s*(?:"([^"]*)"+|'([^']*)'+|([^\s"'=<>`]+)))?/; //匹配属性
+  // 第一个分组是属性的key value 就是分组3/分组4/分组5
+  var startTagClose = /^\s*(\/?)>/; // <div> <br/>
+
+  //对模板进行编译处理
+  function parseHTML(html) {
+    var ELEMENT_TYPE = 1;
+    var TEXT_TYPE = 3;
+    var stack = []; //用于存放元素的
+    var currentParent = null; //指向栈中的最后一个
+    var root;
+    //最终需要转化成一颗抽象语法树
+    function createASTElement(tag, attrs) {
+      return {
+        tag: tag,
+        type: ELEMENT_TYPE,
+        children: [],
+        attrs: attrs,
+        parent: null
+      };
+    }
+    function advance(n) {
+      html = html.substring(n); //删除已经匹配到的内容
+    }
+
+    function start(tag, attrs) {
+      var node = createASTElement(tag, attrs); //创造一个ast节点
+      if (!root) {
+        //看一下是否为空树
+        root = node; //如果为空则当前是数的根节点
+      }
+
+      if (currentParent) {
+        node.parent = currentParent;
+        currentParent.children.push(node);
+      }
+      stack.push(node);
+      currentParent = node; //currentParent 为栈中的最后一个
+      console.log(tag, attrs, '开始');
+    }
+    function chars(text) {
+      text = text.replace(/\s/g, ''); //删除空格
+
+      //文本直接放在当前指向的节点中
+      text && currentParent.children.push({
+        type: TEXT_TYPE,
+        text: text,
+        parent: currentParent
+      });
+    }
+    function end(tag) {
+      stack.pop(); //删除最后一个
+      currentParent = stack[stack.length - 1]; //更新当前指向的节点
+      console.log(tag, '结束');
+    }
+    function parseStartTag() {
+      var start = html.match(startTagOpen);
+      if (start) {
+        var match = {
+          tagName: start[1],
+          //标签名
+          attrs: []
+        };
+        advance(start[0].length); //匹配后就进行删除
+        //如果匹配的不是开始标签的结束 就一直匹配下去
+        var attr, _end;
+        while (!(_end = html.match(startTagClose)) && (attr = html.match(attribute))) {
+          //删除匹配到的属性
+          advance(attr[0].length);
+          match.attrs.push({
+            name: attr[1],
+            value: attr[3] || attr[4] || attr[5]
+          });
+        }
+        if (_end) {
+          advance(_end[0].length); //把开始标签的结束符删除
+        }
+
+        return match;
+      }
+      return false;
+    }
+    while (html) {
+      //如果textEnd 为0 说明是一个开始标签或者结束标签
+      //如果textEnd 不为0 说明是一个结束标签
+      var textEnd = html.indexOf('<'); //如果indexof中的索引是0 说明是个标签
+      if (textEnd == 0) {
+        var startTagMatch = parseStartTag(); //开始标签的匹配结果
+
+        if (startTagMatch) {
+          //解析到开始标签
+          start(startTagMatch.tagName, startTagMatch.attrs);
+          continue;
+        }
+
+        //解析到结束标签
+        var endTagMatch = html.match(endTag);
+        if (endTagMatch) {
+          advance(endTagMatch[0].length);
+          end(endTagMatch.tagName, endTagMatch.attrs);
+          continue;
+        }
+      }
+      //
+      if (textEnd > 0) {
+        var text = html.substring(0, textEnd); //文本内容
+        if (text) {
+          chars(text);
+          advance(text.length); //解析到文本
+          console.log(html);
+        }
+      }
+    }
+    console.log('root', root);
+  }
+
+  //对模板进行编译处理
+  function compilerToFunction(template) {
+    //  1.就是将template转换成ast语法树
+    //  2.生成的render方法（render方法执行后的返回的结果就是虚拟DOM)
+
+    parseHTML(template);
+  }
+
   function _typeof(obj) {
     "@babel/helpers - typeof";
 
@@ -184,6 +312,39 @@
       vm.$options = options; //获取Vue构造函数中的选项参数
       //初始化状态
       initState(vm);
+      if (options.el) {
+        vm.$mount(options.el); //实现数据的挂载
+      }
+    };
+
+    Vue.prototype.$mount = function (el) {
+      var vm = this; //保存实例
+
+      el = document.querySelector(el); //获取挂载元素
+      var ops = vm.$options;
+      if (!ops.render) {
+        //先进行查找有没有render函数，
+        var template; //没有render看一下是否写了template,没写template 采用外部的template
+        if (!ops.template && el) {
+          //没有写模板，但是有el
+          template = el.outerHTML;
+        } else {
+          if (el) {
+            template = ops.template; //如果有el 则采用模板的内容
+          }
+        }
+        //写了template就用 写了的template
+        if (template) {
+          var render = compilerToFunction(template);
+          ops.render = render; //jsx 最终会被编译成h('xxx')
+        }
+
+        ops.render; //最终会获取render方法
+
+        //script 标签引用的vue.global.js 这个编译过程是在浏览器运行的
+        //runtime 是不包含模板编译的，整个编译时在打包的时候通过loader来转译.vue文件的，用runtime的时候不能使用template
+        console.log(template);
+      }
     };
   }
 
